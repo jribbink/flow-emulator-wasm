@@ -1,0 +1,22 @@
+{
+  "name": "flow-emulator",
+  "version": "1.0.0",
+  "description": "Flow emulator WASM",
+  "scripts": {
+    "build": "GOOS=js GOARCH=wasm go build -o ./bin/emulator.wasm ../../cmd/emulator && fcl-bundle",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Dapper Labs",
+  "license": "ISC",
+  "source": "src/emulator.js",
+  "main": "dist/emulator.js",
+  "module": "dist/emulator.module.js",
+  "umd": "dist/emulator.umd.js",
+  "dependencies": {
+    "@onflow/fcl": "^1.2.0",
+    "node-fetch": "^2.6.7"
+  },
+  "devDependencies": {
+    "@onflow/fcl-bundle": "^1.0.1-alpha.0"
+  }
+}

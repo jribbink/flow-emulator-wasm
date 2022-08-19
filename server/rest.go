@@ -1,3 +1,6 @@
+//go:build !wasm
+// +build !wasm
+
 /*
  * Flow Emulator
  *
@@ -21,13 +24,14 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"os"
+
 	"github.com/onflow/flow-emulator/server/backend"
 	"github.com/onflow/flow-go/engine/access/rest"
 	"github.com/onflow/flow-go/model/flow"
 	"github.com/rs/zerolog"
-	"net"
-	"net/http"
-	"os"
 )
 
 type RestServer struct {
