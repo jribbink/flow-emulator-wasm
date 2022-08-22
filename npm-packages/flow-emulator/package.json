@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Flow emulator WASM",
   "scripts": {
-    "build": "GOOS=js GOARCH=wasm go build -o ./bin/emulator.wasm ../../cmd/emulator && fcl-bundle",
+    "build": "GOOS=js GOARCH=wasm go build -o ./dist/emulator.wasm ../../cmd/emulator && fcl-bundle",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Dapper Labs",

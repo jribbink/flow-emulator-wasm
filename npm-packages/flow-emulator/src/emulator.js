@@ -17,7 +17,7 @@ export class Emulator {
       `--js-instance-name=${this.globalKey}`,
       `--service-priv-key=68ee617d9bf67a4677af80aaca5a090fcda80ff2f4dbc340e0e36201fa1f1d8c`,
     ];
-    const wasm = path.resolve(__dirname, "../bin/emulator.wasm");
+    const wasm = path.resolve(__dirname, "./emulator.wasm");
     exec(wasm, ...args);
 
     await this.waitForHandlers();
