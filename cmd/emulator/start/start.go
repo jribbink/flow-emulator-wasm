@@ -1,6 +1,3 @@
-//go:build !wasm
-// +build !wasm
-
 /*
  * Flow Emulator
  *
@@ -26,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -41,9 +39,11 @@ import (
 )
 
 type Config struct {
-	Port                   int           `default:"3569" flag:"port,p" info:"port to run RPC server"`
-	RestPort               int           `default:"8888" flag:"rest-port" info:"port to run the REST API"`
-	AdminPort              int           `default:"8080" flag:"admin-port" info:"port to run the admin API"`
+	ConfigBase
+	ConfigPlatform
+}
+
+type ConfigBase struct {
 	Verbose                bool          `default:"false" flag:"verbose,v" info:"enable verbose logging"`
 	LogFormat              string        `default:"text" flag:"log-format" info:"logging output format. Valid values (text, JSON)"`
 	BlockTime              time.Duration `flag:"block-time,b" info:"time between sealed blocks, e.g. '300ms', '-1.5h' or '2h45m'. Valid units are 'ns', 'us' (or 'µs'), 'ms', 's', 'm', 'h'"`
@@ -72,6 +72,7 @@ const EnvPrefix = "FLOW"
 
 var (
 	conf Config
+	tempConf interface{}
 )
 
 type serviceKeyFunc func(
@@ -81,10 +82,14 @@ type serviceKeyFunc func(
 ) (crypto.PrivateKey, crypto.SignatureAlgorithm, crypto.HashAlgorithm)
 
 func Cmd(getServiceKey serviceKeyFunc) *cobra.Command {
+	fmt.Println("a", time.Now())
+
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Starts the Flow emulator server",
 		Run: func(cmd *cobra.Command, args []string) {
+			expandStruct(tempConf, &conf, 0)
+
 			var (
 				servicePrivateKey  crypto.PrivateKey
 				servicePublicKey   crypto.PublicKey
@@ -152,30 +157,33 @@ func Cmd(getServiceKey serviceKeyFunc) *cobra.Command {
 			}
 
 			serverConf := &server.Config{
-				GRPCPort:  conf.Port,
-				GRPCDebug: conf.GRPCDebug,
-				AdminPort: conf.AdminPort,
-				RESTPort:  conf.RestPort,
-				RESTDebug: conf.RESTDebug,
-				// TODO: allow headers to be parsed from environment
-				HTTPHeaders:               nil,
-				BlockTime:                 conf.BlockTime,
-				ServicePublicKey:          servicePublicKey,
-				ServicePrivateKey:         servicePrivateKey,
-				ServiceKeySigAlgo:         serviceKeySigAlgo,
-				ServiceKeyHashAlgo:        serviceKeyHashAlgo,
-				Persist:                   conf.Persist,
-				DBPath:                    conf.DBPath,
-				GenesisTokenSupply:        parseCadenceUFix64(conf.TokenSupply, "token-supply"),
-				TransactionMaxGasLimit:    uint64(conf.TransactionMaxGasLimit),
-				ScriptGasLimit:            uint64(conf.ScriptGasLimit),
-				TransactionExpiry:         uint(conf.TransactionExpiry),
-				StorageLimitEnabled:       conf.StorageLimitEnabled,
-				StorageMBPerFLOW:          storageMBPerFLOW,
-				MinimumStorageReservation: minimumStorageReservation,
-				TransactionFeesEnabled:    conf.TransactionFeesEnabled,
-				WithContracts:             conf.WithContracts,
+				ConfigBase: server.ConfigBase {
+					GRPCDebug:								conf.GRPCDebug,
+					RESTDebug: 								conf.RESTDebug,
+					// TODO: allow headers to be parsed from environment
+					HTTPHeaders:               nil,
+					BlockTime:                 conf.BlockTime,
+					ServicePublicKey:          servicePublicKey,
+					ServicePrivateKey:         servicePrivateKey,
+					ServiceKeySigAlgo:         serviceKeySigAlgo,
+					ServiceKeyHashAlgo:        serviceKeyHashAlgo,
+					Persist:                   conf.Persist,
+					DBPath:                    conf.DBPath,
+					GenesisTokenSupply:        parseCadenceUFix64(conf.TokenSupply, "token-supply"),
+					TransactionMaxGasLimit:    uint64(conf.TransactionMaxGasLimit),
+					ScriptGasLimit:            uint64(conf.ScriptGasLimit),
+					TransactionExpiry:         uint(conf.TransactionExpiry),
+					StorageLimitEnabled:       conf.StorageLimitEnabled,
+					StorageMBPerFLOW:          storageMBPerFLOW,
+					MinimumStorageReservation: minimumStorageReservation,
+					TransactionFeesEnabled:    conf.TransactionFeesEnabled,
+					WithContracts:             conf.WithContracts,
+				},
 			}
+
+			addPlatformConfig(serverConf)
+
+			fmt.Println("b", time.Now())
 
 			emu := server.NewEmulatorServer(logger, serverConf)
 			if emu != nil {
@@ -207,10 +215,14 @@ func initLogger() *logrus.Logger {
 }
 
 func initConfig(cmd *cobra.Command) {
-	err := sconfig.New(&conf).
+	// flatten embedded struct as sconfig does not resolve embedded fields
+	tempConf = flattenStruct(conf)
+
+	err := sconfig.New(tempConf).
 		FromEnvironment(EnvPrefix).
 		BindFlags(cmd.PersistentFlags()).
 		Parse()
+	
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -219,6 +231,60 @@ func initConfig(cmd *cobra.Command) {
 func Exit(code int, msg string) {
 	fmt.Fprintln(os.Stderr, msg)
 	os.Exit(code)
+}
+
+func flattenStruct(target interface{}) interface{} {
+	types, values := getDeepFields(target)
+
+	t := reflect.StructOf(types)
+	v := reflect.New(t).Elem()
+
+	for i := 0; i < len(types); i++ {
+		v.Field(i).Set(values[i])
+	}
+
+	return v.Addr().Interface()
+}
+
+func expandStruct(source interface{}, target interface{}, index int) int {
+	targetValue := reflect.ValueOf(target).Elem()
+	ifv := targetValue
+
+	for i := 0; i < ifv.NumField(); i++ {
+		v := ifv.Field(i)
+
+		if v.Kind() == reflect.Struct {
+			index = expandStruct(source, v.Addr().Interface(), index)
+		} else {
+			v.Set(reflect.ValueOf(source).Elem().Field(index))
+			index++
+		}
+	}
+
+	return index
+}
+
+func getDeepFields(target interface{}) ([]reflect.StructField, []reflect.Value) {
+	types := make([]reflect.StructField, 0)
+	values := make([]reflect.Value, 0)
+	parentType := reflect.TypeOf(target)
+	parentValue := reflect.ValueOf(target)
+
+	for i := 0; i < parentType.NumField(); i++ {
+		t := parentType.Field(i)
+		v := parentValue.Field(i)
+
+		if v.Kind() == reflect.Struct {
+			childTypes, childValues := getDeepFields(v.Interface())
+			types = append(types, childTypes...)
+			values = append(values, childValues...)
+		} else {
+			types = append(types, t)
+			values = append(values, v)
+		}
+	}
+
+	return types, values
 }
 
 func parseCadenceUFix64(value string, valueName string) cadence.UFix64 {

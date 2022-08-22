@@ -4,11 +4,21 @@
 
 "use strict";
 
+import nodeFetch from "node-fetch";
+import wasmExec from "./wasm_exec";
+import os from "os";
+import crypto from "crypto";
+import fs from "fs";
+import { TextEncoder, TextDecoder } from "util";
+
+export let i = 0;
+
 export default async (...argv) => {
   globalThis.require = require;
-  globalThis.fs = await import("fs");
-  globalThis.TextEncoder = await import("util").TextEncoder;
-  globalThis.TextDecoder = await import("util").TextDecoder;
+  globalThis.fs = fs;
+  globalThis.TextEncoder = TextEncoder;
+
+  globalThis.TextDecoder = TextDecoder;
   globalThis.Uint8Array = Uint8Array;
   globalThis.Response = nodeFetch.Response;
   globalThis.Object = Object;
@@ -20,19 +30,18 @@ export default async (...argv) => {
     },
   };
 
-  const crypto = await import("crypto");
   globalThis.crypto = {
     getRandomValues(b) {
       crypto.randomFillSync(b);
     },
   };
 
-  await import("./wasm_exec");
+  await wasmExec();
 
   const go = new Go();
   go.argv = argv;
-  go.env = Object.assign({ TMPDIR: await import("os").tmpdir() }, process.env);
-  go.exit = process.exit;
+  go.env = Object.assign({ TMPDIR: os.tmpdir() }, process.env);
+
   WebAssembly.instantiate(fs.readFileSync(argv[0]), go.importObject)
     .then((result) => {
       process.on("exit", (code) => {

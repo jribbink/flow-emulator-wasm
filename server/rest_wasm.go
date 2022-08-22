@@ -26,13 +26,10 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"syscall/js"
 
-	promise "github.com/nlepage/go-js-promise"
 	"github.com/onflow/flow-emulator/server/backend"
 	"github.com/onflow/flow-go/engine/access/rest"
 	"github.com/onflow/flow-go/model/flow"
@@ -40,12 +37,12 @@ import (
 )
 
 type RestServer struct {
-	server   *http.Server
-	listener net.Listener
+	server   		*http.Server
+	jsInstance 	js.Value
 }
 
 func (r *RestServer) Start() error {
-	Serve(r.server.Handler)
+	Serve(r.server.Handler, "restHandler", r.jsInstance)
 	return nil
 }
 
@@ -53,7 +50,7 @@ func (r *RestServer) Stop() {
 	_ = r.server.Shutdown(context.Background())
 }
 
-func NewRestServer(be *backend.Backend) (*RestServer, error) {
+func NewRestServer(be *backend.Backend, jsInstanceName string, debug bool) (*RestServer, error) {
 	logger := zerolog.Logger{}
 
 	srv, err := rest.NewServer(backend.NewAdapter(be), "127.0.0.1:3333", logger, flow.Emulator.Chain())
@@ -61,52 +58,59 @@ func NewRestServer(be *backend.Backend) (*RestServer, error) {
 		return nil, err
 	}
 
-
+	jsInstance := js.Global().Get(jsInstanceName)
 
 	return &RestServer{
 		server:   srv,
+		jsInstance: jsInstance,
 	}, nil
 }
 
-func Serve(handler http.Handler) func() {
-	var prefix = js.Global().Get("wasmhttp").Get("path").String()
-	for strings.HasSuffix(prefix, "/") {
-		prefix = strings.TrimSuffix(prefix, "/")
-	}
+func Serve(handler http.Handler, jsHandlerName string, jsHandlerParent js.Value) func() {
+	jsHandler := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		var resolve func(js.Value)
+		var reject func(js.Value)
 
-	var cb = js.FuncOf(func(_ js.Value, args []js.Value) interface{} {
-		var resPromise, resolve, reject = promise.New()
+		promise := js.Global().Get("Promise").New(js.FuncOf(func(_ js.Value, args []js.Value) any {
+			resolve = func(value js.Value) {
+				args[0].Invoke(value)
+			}
+	
+			reject = func(value js.Value) {
+				args[1].Invoke(value)
+			}
+	
+			return js.Undefined()
+		}))
 
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
 					if err, ok := r.(error); ok {
-						reject(fmt.Sprintf("wasmhttp: panic: %+v\n", err))
+						reject(js.ValueOf(fmt.Sprintf("panic: %+v\n", err)))
 					} else {
-						reject(fmt.Sprintf("wasmhttp: panic: %v\n", r))
+						reject(js.ValueOf(fmt.Sprintf("panic: %v\n", r)))
 					}
 				}
 			}()
 
-			var res = NewResponseRecorder()
+			res := NewResponseRecorder()
 
 			handler.ServeHTTP(res, Request(args[0], args[1]))
 
 			resolve(res.JSResponse())
 		}()
 
-		return resPromise
+		return promise
 	})
 
-	js.Global().Get("wasmhttp").Call("setHandler", cb)
+	jsHandlerParent.Set(jsHandlerName, jsHandler)
 
-	return cb.Release
+	return jsHandler.Release
 }
 
 func Request(url js.Value, r js.Value) *http.Request {
 	body := r.Get("body").String()
-
-	print(url.String())
 
 	req := httptest.NewRequest(
 		r.Get("method").String(),
@@ -115,10 +119,12 @@ func Request(url js.Value, r js.Value) *http.Request {
 	)
 
 	headers := r.Get("headers")
-	headersKeys := js.Global().Get("Object").Call("keys", headers)
-	for i := 0; i < headersKeys.Length(); i++ {
-		key := headersKeys.Get(fmt.Sprint(i)).String()
-		req.Header.Set(key, headers.Get(key).String())
+	if(!headers.IsNull() && !headers.IsUndefined()) {
+		headersKeys := js.Global().Get("Object").Call("keys", headers)
+		for i := 0; i < headersKeys.Length(); i++ {
+			key := headersKeys.Get(fmt.Sprint(i)).String()
+			req.Header.Set(key, headers.Get(key).String())
+		}
 	}
 
 	return req

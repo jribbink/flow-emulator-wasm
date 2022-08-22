@@ -22,6 +22,9 @@
 package server
 
 import (
+	"fmt"
+	"net"
+
 	grpcprometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/onflow/flow-go/access"
 	legacyaccess "github.com/onflow/flow-go/access/legacy"
@@ -30,16 +33,18 @@ import (
 	legacyaccessproto "github.com/onflow/flow/protobuf/go/flow/legacy/access"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	"github.com/onflow/flow-emulator/server/backend"
 )
 
 type GRPCServer struct {
 	logger     *logrus.Logger
+	port       int
 	grpcServer *grpc.Server
 }
 
-func NewGRPCServer(logger *logrus.Logger, b *backend.Backend) *GRPCServer {
+func NewGRPCServer(logger *logrus.Logger, b *backend.Backend, jsInstanceName string, debug bool) *GRPCServer {
 	grpcServer := grpc.NewServer(
 		grpc.StreamInterceptor(grpcprometheus.StreamServerInterceptor),
 		grpc.UnaryInterceptor(grpcprometheus.UnaryServerInterceptor),
@@ -53,12 +58,31 @@ func NewGRPCServer(logger *logrus.Logger, b *backend.Backend) *GRPCServer {
 
 	grpcprometheus.Register(grpcServer)
 
+	if debug {
+		reflection.Register(grpcServer)
+	}
+
 	return &GRPCServer{
 		logger:     logger,
+		//port:       port,
 		grpcServer: grpcServer,
 	}
 }
 
 func (g *GRPCServer) Server() *grpc.Server {
 	return g.grpcServer
+}
+
+func (g *GRPCServer) Start() error {
+	return nil
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.port))
+	if err != nil {
+		return err
+	}
+
+	return g.grpcServer.Serve(lis)
+}
+
+func (g *GRPCServer) Stop() {
+	g.grpcServer.GracefulStop()
 }

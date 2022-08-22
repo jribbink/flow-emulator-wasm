@@ -3,27 +3,48 @@ import path from "path";
 
 export class Emulator {
   constructor() {
+    this.globalKey = "__FLOW_EMULATOR__";
+    this.restHandler = null;
     this.httpHandler = null;
-    this.globalKey = "flow-emulator";
+    this.grpcHandler = null;
+    this.stopHandler = null;
   }
 
   async start() {
     globalThis[this.globalKey] = this;
 
-    return new Promise((resolve) => {
-      var args = [`--globalKey=${this.globalKey}`];
-      const wasm = path.resolve(__dirname, "../bin/emulator.wasm");
-      exec(wasm, ...args);
+    var args = [
+      `--js-instance-name=${this.globalKey}`,
+      `--service-priv-key=68ee617d9bf67a4677af80aaca5a090fcda80ff2f4dbc340e0e36201fa1f1d8c`,
+    ];
+    const wasm = path.resolve(__dirname, "../bin/emulator.wasm");
+    exec(wasm, ...args);
 
-      const originalSetHttpHandler = this.setHttpHandler;
-      this.setHttpHandler = (handler) => {
-        if (handler) resolve();
-        originalSetHttpHandler(handler);
-      };
-    });
+    await this.waitForHandlers();
   }
 
-  setHttpHandler(handler) {
-    this.httpHandler = handler;
+  async stop() {
+    this.stopHandler();
+  }
+
+  waitForHandlers() {
+    const handlers = ["restHandler"];
+    return Promise.all(
+      handlers.map(
+        (handler) =>
+          new Promise((resolve) =>
+            Object.defineProperty(this, handler, {
+              set(value) {
+                if (value) {
+                  Object.defineProperty(this, handler, {
+                    value,
+                  });
+                  resolve();
+                }
+              },
+            })
+          )
+      )
+    );
   }
 }

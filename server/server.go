@@ -1,6 +1,3 @@
-//go:build !wasm
-// +build !wasm
-
 /*
  * Flow Emulator
  *
@@ -53,9 +50,6 @@ type EmulatorServer struct {
 }
 
 const (
-	defaultGRPCPort               = 3569
-	defaultRESTPort               = 8888
-	defaultAdminPort              = 8080
 	defaultLivenessCheckTolerance = time.Second
 	defaultDBGCInterval           = time.Minute * 5
 	defaultDBGCRatio              = 0.5
@@ -80,10 +74,12 @@ var (
 
 // Config is the configuration for an emulator server.
 type Config struct {
-	GRPCPort                  int
+	ConfigBase
+	ConfigPlatform
+}
+
+type ConfigBase struct {
 	GRPCDebug                 bool
-	AdminPort                 int
-	RESTPort                  int
 	RESTDebug                 bool
 	HTTPHeaders               []HTTPHeader
 	BlockTime                 time.Duration
@@ -114,6 +110,7 @@ type Config struct {
 
 // NewEmulatorServer creates a new instance of a Flow Emulator server.
 func NewEmulatorServer(logger *logrus.Logger, conf *Config) *EmulatorServer {
+	fmt.Println("c", time.Now())
 	conf = sanitizeConfig(conf)
 
 	store, err := configureStorage(logger, conf)
@@ -122,7 +119,9 @@ func NewEmulatorServer(logger *logrus.Logger, conf *Config) *EmulatorServer {
 		return nil
 	}
 
+	fmt.Println("chain", time.Now())
 	blockchain, err := configureBlockchain(conf, store.Store())
+	fmt.Println("chainend", time.Now())
 	if err != nil {
 		logger.WithError(err).Error("❗  Failed to configure emulated blockchain")
 		return nil
@@ -156,12 +155,6 @@ func NewEmulatorServer(logger *logrus.Logger, conf *Config) *EmulatorServer {
 	be := configureBackend(logger, conf, blockchain)
 
 	livenessTicker := NewLivenessTicker(conf.LivenessCheckTolerance)
-	grpcServer := NewGRPCServer(logger, be, conf.GRPCPort, conf.GRPCDebug)
-	restServer, err := NewRestServer(be, conf.RESTPort, conf.RESTDebug)
-	if err != nil {
-		logger.WithError(err).Error("❗  Failed to startup REST API")
-		return nil
-	}
 
 	server := &EmulatorServer{
 		logger:   logger,
@@ -169,12 +162,18 @@ func NewEmulatorServer(logger *logrus.Logger, conf *Config) *EmulatorServer {
 		backend:  be,
 		storage:  store,
 		liveness: livenessTicker,
-		grpc:     grpcServer,
-		rest:     restServer,
-		admin:    nil,
 	}
 
-	server.admin = NewAdminServer(server, be, &store, grpcServer, livenessTicker, conf.AdminPort, conf.HTTPHeaders)
+	fmt.Println("d", time.Now())
+	grpc, rest, admin, err := configureApis(server, conf, logger, be, &store, livenessTicker)
+	fmt.Println("e", time.Now())
+	if(err != nil) {
+		return nil
+	}
+
+	server.grpc = grpc
+	server.rest = rest
+	server.admin = admin
 
 	// only create blocks ticker if block time > 0
 	if conf.BlockTime > 0 {
@@ -195,20 +194,8 @@ func (s *EmulatorServer) Start() {
 	}
 	s.group.Add(s.liveness)
 
-	s.logger.
-		WithField("port", s.config.GRPCPort).
-		Infof("🌱  Starting gRPC server on port %d", s.config.GRPCPort)
-	s.group.Add(s.grpc)
-
-	s.logger.
-		WithField("port", s.config.RESTPort).
-		Infof("🌱  Starting REST API on port %d", s.config.RESTPort)
-	s.group.Add(s.rest)
-
-	s.logger.
-		WithField("port", s.config.AdminPort).
-		Infof("🌱  Starting admin server on port %d", s.config.AdminPort)
-	s.group.Add(s.admin)
+	// Start GRPC/REST/Admin APIs
+	s.startApis()
 
 	// only start blocks ticker if it exists
 	if s.blocks != nil {
@@ -234,14 +221,6 @@ func (s *EmulatorServer) Stop() {
 	s.group.Stop()
 
 	s.logger.Info("🛑  Server stopped")
-}
-
-func configureStorage(logger *logrus.Logger, conf *Config) (storage Storage, err error) {
-	if conf.Persist {
-		return NewBadgerStorage(logger, conf.DBPath, conf.DBGCInterval, conf.DBGCDiscardRatio)
-	}
-
-	return NewMemoryStorage(), nil
 }
 
 func configureBlockchain(conf *Config, store storage.Store) (*emulator.Blockchain, error) {
@@ -288,17 +267,8 @@ func configureBackend(logger *logrus.Logger, conf *Config, blockchain *emulator.
 }
 
 func sanitizeConfig(conf *Config) *Config {
-	if conf.GRPCPort == 0 {
-		conf.GRPCPort = defaultGRPCPort
-	}
-
-	if conf.RESTPort == 0 {
-		conf.RESTPort = defaultRESTPort
-	}
-
-	if conf.AdminPort == 0 {
-		conf.AdminPort = defaultAdminPort
-	}
+	// Apply platform-specific config sanitization
+	conf = sanitizeConfigPlatform(conf)
 
 	if conf.HTTPHeaders == nil {
 		conf.HTTPHeaders = defaultHTTPHeaders

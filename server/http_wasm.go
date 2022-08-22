@@ -51,6 +51,7 @@ func NewAdminServer(
 	storage *Storage,
 	grpcServer *GRPCServer,
 	liveness *LivenessTicker,
+	jsInstanceName string,
 	headers []HTTPHeader,
 ) *HTTPServer {
 	wrappedServer := grpcweb.WrapServer(
@@ -81,6 +82,7 @@ func NewAdminServer(
 }
 
 func (h *HTTPServer) Start() error {
+	return nil
 	err := h.httpServer.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
